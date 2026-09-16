@@ -45,11 +45,13 @@ suite('the extension in a quilt', () => {
 	});
 
 	test('opens a node of the quilt and keeps the document intact', async () => {
+		// LOOM_NODE names the file, so the same suite runs against a real paper's quilt as well as the fixture
+		const name = process.env.LOOM_NODE ?? 'sy-0003.tex';
 		const folder = vscode.workspace.workspaceFolders![0];
-		const file = vscode.Uri.file(path.join(folder.uri.fsPath, 'nodes', 'sy-0003.tex'));
+		const file = vscode.Uri.file(path.join(folder.uri.fsPath, 'nodes', name));
 		const doc = await vscode.workspace.openTextDocument(file);
 		await vscode.window.showTextDocument(doc);
-		assert.ok(doc.getText().includes('sy-0003'));
+		assert.ok(doc.getText().includes(name.replace('.tex', '')), 'the node file does not name its own id');
 	});
 
 	test('the language client reaches running when the server is on the path', async function () {
