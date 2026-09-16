@@ -47,7 +47,8 @@ function keyUnderCursor(): string | undefined {
 	if (!editor) {
 		return undefined;
 	}
-	return keyAt(editor.document.getText(), editor.document.offsetAt(editor.selection.active));
+	const root = editor.document.uri.scheme === 'file' ? findQuilt(editor.document.uri.fsPath) : undefined;
+	return keyAt(editor.document.getText(), editor.document.offsetAt(editor.selection.active), root);
 }
 
 function run(argv: string[], root: string): Promise<{ code: number; stdout: string; stderr: string }> {

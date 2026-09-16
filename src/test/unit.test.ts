@@ -157,6 +157,34 @@ suite('the key under the cursor', () => {
 		assert.strictEqual(keyAt(text, text.indexOf('Some text') + 3), 'rl-0004');
 	});
 
+	test('takes the first node of the file an \\input names, not its path', () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-key-'));
+		fs.mkdirSync(path.join(root, 'nodes'));
+		fs.writeFileSync(path.join(root, 'nodes', 'rl-0008.tex'), '% a comment\n\\begin{example}\\label{rl-0008}\nText.\n\\end{example}\n');
+		const text = '\\section{Examples}\\label{rl-0100}\n\\input{nodes/rl-0008}\n\\nest{nodes/rl-0008.tex}\n';
+		assert.strictEqual(keyAt(text, text.indexOf('\\input') + 3, root), 'rl-0008');
+		assert.strictEqual(keyAt(text, text.indexOf('\\nest') + 8, root), 'rl-0008');
+	});
+
+	test('falls back to the label above for an \\input of a file with no node', () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'loom-key-'));
+		fs.writeFileSync(path.join(root, 'intro.tex'), 'Prose only.\n');
+		const text = '\\section{Intro}\\label{rl-0100}\n\\input{intro}\n';
+		assert.strictEqual(keyAt(text, text.indexOf('\\input') + 2, root), 'rl-0100');
+		assert.strictEqual(keyAt(text, text.indexOf('\\input') + 2), 'rl-0100');
+	});
+
+	test('never takes the argument of a command that names no key', () => {
+		const text = '\\begin{lemma}\\label{rl-0004}\nA \\emph{widget} is \\textbf{fine}.\n';
+		assert.strictEqual(keyAt(text, text.indexOf('widget') + 1), 'rl-0004');
+		assert.strictEqual(keyAt('\\section{Setup}', 10), undefined);
+	});
+
+	test('takes a reference with an optional argument and a star', () => {
+		const text = 'see \\cref*[x]{rl-0011}';
+		assert.strictEqual(keyAt(text, text.indexOf('rl-0011') + 1), 'rl-0011');
+	});
+
 	test('gives nothing when there is nothing to take', () => {
 		assert.strictEqual(keyAt('plain prose with no commands', 4), undefined);
 	});
