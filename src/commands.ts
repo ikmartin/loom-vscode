@@ -3,10 +3,9 @@
 export interface Settings {
 	loomPath: string;
 	serverPath: string;
-	servePort: number;
 }
 
-/** The argument vector for a loom call in `root`. Arguments are passed as a vector, never as a shell string, so a title with a space or a quote is safe. */
+/** The argument vector for a loom call in `root`. Arguments are passed as a vector, never as a shell string, so a title with a space or a quote is safe. For `serve`, `arg` is the port. */
 export function argvFor(name: string, root: string, settings: Settings, arg?: string): string[] | undefined {
 	const call = (...args: string[]) => [settings.loomPath, ...args, '--quilt', root];
 	switch (name) {
@@ -21,7 +20,7 @@ export function argvFor(name: string, root: string, settings: Settings, arg?: st
 		case 'accept':
 			return arg ? call('accept', arg) : undefined;
 		case 'serve':
-			return call('serve', '--port', String(settings.servePort));
+			return arg ? call('serve', '--port', arg) : undefined;
 		case 'bundle':
 			return arg ? call('bundle', arg) : undefined;
 		case 'deps':
@@ -31,9 +30,9 @@ export function argvFor(name: string, root: string, settings: Settings, arg?: st
 	}
 }
 
-/** The arras URL for a key, on the port `loom serve` is configured to use. */
-export function arrasUrl(settings: Settings, key: string): string {
-	return `http://127.0.0.1:${settings.servePort}/node/${key}`;
+/** The arras URL for a key on the server at `base`. */
+export function nodeUrl(base: string, key: string): string {
+	return `${base.endsWith('/') ? base : `${base}/`}node/${key}`;
 }
 
 /** The commands that write to the quilt, and therefore confirm first. */

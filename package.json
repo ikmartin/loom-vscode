@@ -76,11 +76,6 @@
           "default": "loom-lsp",
           "description": "The loom-lsp executable."
         },
-        "loom.servePort": {
-          "type": "number",
-          "default": 8000,
-          "description": "The port loom serve listens on."
-        },
         "loom.autostart": {
           "type": "boolean",
           "default": true,

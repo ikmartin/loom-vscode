@@ -2,13 +2,16 @@
 
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
+import * as http from 'node:http';
+import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { argvFor, arrasUrl, confirmationFor, Settings } from '../commands';
+import { argvFor, confirmationFor, nodeUrl, Settings } from '../commands';
 import { findQuilt, keyAt } from '../quilt';
+import { freePort, waitForManifest } from '../serve';
 
-const settings: Settings = { loomPath: '/opt/loom', serverPath: 'loom-lsp', servePort: 9000 };
+const settings: Settings = { loomPath: '/opt/loom', serverPath: 'loom-lsp' };
 
 suite('the command builders', () => {
 	test('put the quilt root on every call', () => {
@@ -20,9 +23,9 @@ suite('the command builders', () => {
 		}
 	});
 
-	test('ask lint for json and serve for the configured port', () => {
+	test('ask lint for json and serve for the port given', () => {
 		assert.deepStrictEqual(argvFor('lint', '/tmp/q', settings), ['/opt/loom', 'lint', '--json', '--quilt', '/tmp/q']);
-		assert.deepStrictEqual(argvFor('serve', '/tmp/q', settings), [
+		assert.deepStrictEqual(argvFor('serve', '/tmp/q', settings, '9000'), [
 			'/opt/loom',
 			'serve',
 			'--port',
@@ -30,6 +33,10 @@ suite('the command builders', () => {
 			'--quilt',
 			'/tmp/q'
 		]);
+	});
+
+	test('build no serve without a port', () => {
+		assert.strictEqual(argvFor('serve', '/tmp/q', settings), undefined);
 	});
 
 	test('keep a title with spaces in one argument', () => {
@@ -50,13 +57,58 @@ suite('the command builders', () => {
 		assert.strictEqual(argvFor('nonsense', '/tmp/q', settings), undefined);
 	});
 
-	test('build the arras url on the configured port', () => {
-		assert.strictEqual(arrasUrl(settings, 'rl-0004'), 'http://127.0.0.1:9000/node/rl-0004');
+	test('build the arras url on a server, with or without a trailing slash', () => {
+		assert.strictEqual(nodeUrl('http://127.0.0.1:9000/', 'rl-0004'), 'http://127.0.0.1:9000/node/rl-0004');
+		assert.strictEqual(nodeUrl('http://127.0.0.1:9000', 'rl-0004'), 'http://127.0.0.1:9000/node/rl-0004');
 	});
 
 	test('confirm only what writes', () => {
 		assert.ok(confirmationFor('accept', 'rl-0004')?.includes('rl-0004'));
 		assert.strictEqual(confirmationFor('status'), undefined);
+	});
+});
+
+suite('starting loom serve', () => {
+	const listen = (server: net.Server, port = 0): Promise<number> =>
+		new Promise((resolve, reject) => {
+			server.once('error', reject);
+			server.listen(port, '127.0.0.1', () => resolve((server.address() as net.AddressInfo).port));
+		});
+	const close = (server: net.Server): Promise<void> => new Promise((resolve) => server.close(() => resolve()));
+
+	test('freePort gives a port that can be listened on', async () => {
+		const port = await freePort();
+		assert.ok(port > 0);
+		const server = net.createServer();
+		assert.strictEqual(await listen(server, port), port);
+		await close(server);
+	});
+
+	test('waitForManifest is true once the manifest answers', async () => {
+		const server = http.createServer((req, res) => {
+			res.writeHead(req.url === '/build/manifest.json' ? 200 : 404);
+			res.end('{}');
+		});
+		const port = await listen(server);
+		try {
+			assert.strictEqual(await waitForManifest(`http://127.0.0.1:${port}/`, 5000), true);
+		} finally {
+			await close(server);
+		}
+	});
+
+	test('waitForManifest is false on timeout', async () => {
+		const port = await freePort();
+		const began = Date.now();
+		assert.strictEqual(await waitForManifest(`http://127.0.0.1:${port}/`, 500), false);
+		assert.ok(Date.now() - began < 3000);
+	});
+
+	test('waitForManifest is false promptly once the process is gone', async () => {
+		const port = await freePort();
+		const began = Date.now();
+		assert.strictEqual(await waitForManifest(`http://127.0.0.1:${port}/`, 30000, () => false), false);
+		assert.ok(Date.now() - began < 1000);
 	});
 });
 

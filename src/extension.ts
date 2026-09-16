@@ -5,8 +5,9 @@ import { execFile } from 'node:child_process';
 import * as vscode from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, State, TransportKind } from 'vscode-languageclient/node';
 
-import { argvFor, arrasUrl, confirmationFor, Settings } from './commands';
+import { argvFor, confirmationFor, nodeUrl, Settings } from './commands';
 import { findQuilt, keyAt } from './quilt';
+import { freePort, waitForManifest } from './serve';
 
 let client: LanguageClient | undefined;
 /** Why the last start failed, for the output channel and for the tests. */
@@ -19,8 +20,7 @@ export function settings(): Settings {
 	// LOOM_BIN and LOOM_LSP override the settings. The extension host does not inherit a shell's PATH, so a test harness, or anyone launching the editor from a virtual environment, needs a way to name the executables that does not write to the user's settings.
 	return {
 		loomPath: process.env.LOOM_BIN || c.get<string>('loomPath', 'loom'),
-		serverPath: process.env.LOOM_LSP || c.get<string>('serverPath', 'loom-lsp'),
-		servePort: c.get<number>('servePort', 8000)
+		serverPath: process.env.LOOM_LSP || c.get<string>('serverPath', 'loom-lsp')
 	};
 }
 
@@ -136,18 +136,104 @@ async function showLint(json: string, root: string): Promise<void> {
 	void vscode.window.showInformationMessage(`loom lint: ${parsed.length} diagnostic(s)`);
 }
 
-/** Injected in tests so nothing opens and no terminal appears. */
+/** Injected in tests so no browser opens and no real server starts. */
 export const hooks: {
 	openExternal: (url: string) => Thenable<boolean>;
-	openTerminal: (name: string, argv: string[], cwd: string) => void;
+	startServer: (argv: string[], cwd: string) => vscode.Terminal;
 } = {
 	openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
-	openTerminal: (name, argv, cwd) => {
-		const terminal = vscode.window.createTerminal({ name, cwd });
-		terminal.sendText(argv.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(' '));
-		terminal.show();
-	}
+	// the terminal runs loom itself rather than a shell, so it ends when loom does; it is never shown, so the editor keeps focus
+	startServer: (argv, cwd) =>
+		vscode.window.createTerminal({ name: 'loom serve', cwd, shellPath: argv[0], shellArgs: argv.slice(1) })
 };
+
+/** The `loom serve` this window owns, one per quilt root. */
+export const servers = new Map<string, { port: number; url: string; terminal: vscode.Terminal }>();
+/** Starts in flight, so two quick calls for one quilt share a server. */
+const starting = new Map<string, Promise<{ url: string; started: boolean } | undefined>>();
+
+/** Dispose every server terminal, which ends its process, and forget them all. */
+export function stopServers(): void {
+	for (const server of servers.values()) {
+		server.terminal.dispose();
+	}
+	servers.clear();
+}
+
+/**
+ * The URL of this window's `loom serve` for `root`, starting one on a free port if none is running.
+ *
+ * `started` is true when this call started it. A server that exits before answering is retried once on a new port, since the likeliest cause is a port taken in between; a server that is alive but silent for 30 s gets a warning and undefined.
+ */
+export function ensureServer(root: string): Promise<{ url: string; started: boolean } | undefined> {
+	const existing = servers.get(root);
+	if (existing && existing.terminal.exitStatus === undefined) {
+		return Promise.resolve({ url: existing.url, started: false });
+	}
+	const pending = starting.get(root);
+	if (pending) {
+		return pending;
+	}
+	const made = startServerFor(root).finally(() => starting.delete(root));
+	starting.set(root, made);
+	return made;
+}
+
+async function startServerFor(root: string): Promise<{ url: string; started: boolean } | undefined> {
+	const stale = servers.get(root);
+	if (stale) {
+		stale.terminal.dispose();
+		servers.delete(root);
+	}
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const port = await freePort();
+		const argv = argvFor('serve', root, settings(), String(port))!;
+		const url = `http://127.0.0.1:${port}/`;
+		const terminal = hooks.startServer(argv, root);
+		const alive = () => terminal.exitStatus === undefined;
+		if (await waitForManifest(url, 30000, alive)) {
+			servers.set(root, { port, url, terminal });
+			void vscode.window.showInformationMessage(`loom serve started in terminal '${terminal.name}' at ${url}`);
+			return { url, started: true };
+		}
+		if (alive()) {
+			void vscode.window.showWarningMessage(`loom serve did not answer at ${url} within 30 s; see the terminal '${terminal.name}'.`);
+			return undefined;
+		}
+		output?.appendLine(`loom serve on port ${port} exited before it answered (code ${terminal.exitStatus?.code ?? 'unknown'})`);
+		terminal.dispose();
+	}
+	void vscode.window.showWarningMessage('loom serve exited before it answered, twice; run it in a terminal to see why.');
+	return undefined;
+}
+
+/** Carry out a `loom.run` from a code action: an argument vector, and a confirmation to ask first when it is non-empty. */
+async function runArgv(argv: unknown, confirm: unknown): Promise<void> {
+	if (!Array.isArray(argv) || argv.length === 0 || !argv.every((a) => typeof a === 'string')) {
+		void vscode.window.showWarningMessage('loom: that command carried no argument vector.');
+		return;
+	}
+	const args = argv as string[];
+	const flag = args.indexOf('--quilt');
+	const root = flag >= 0 && flag + 1 < args.length ? args[flag + 1] : currentQuilt();
+	if (!root) {
+		void vscode.window.showWarningMessage('loom: this workspace is not a quilt.');
+		return;
+	}
+	if (typeof confirm === 'string' && confirm) {
+		const answer = await vscode.window.showWarningMessage(confirm, { modal: true }, 'Run it');
+		if (answer !== 'Run it') {
+			return;
+		}
+	}
+	const name = args[1] ?? 'loom';
+	const result = await run(args, root);
+	if (result.code !== 0) {
+		void vscode.window.showErrorMessage(`loom ${name} failed: ${result.stderr || result.stdout}`);
+		return;
+	}
+	await show(`loom ${name}`, result.stdout, args.includes('--print') ? 'latex' : 'plaintext');
+}
 
 /** The language client, for tests and for a status display. */
 export function currentClient(): LanguageClient | undefined {
@@ -166,7 +252,7 @@ export function startClient(context: vscode.ExtensionContext): LanguageClient | 
 	};
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ scheme: 'file', language: 'latex' }, { scheme: 'file', language: 'tex' }, { scheme: 'file', pattern: '**/*.tex' }],
-		initializationOptions: { loomPath: s.loomPath, serveUrl: `http://127.0.0.1:${s.servePort}` },
+		initializationOptions: { loomPath: s.loomPath },
 		outputChannel: output
 	};
 	const made = new LanguageClient('loom-lsp', 'loom language server', serverOptions, clientOptions);
@@ -219,25 +305,34 @@ export function activate(context: vscode.ExtensionContext): { client?: LanguageC
 	});
 	register('loom.accept', () => runNamed('accept', keyUnderCursor()));
 	register('loom.bundle', () => runNamed('bundle', keyUnderCursor()));
-	register('loom.serve', () => {
+	register('loom.serve', async () => {
 		const root = currentQuilt();
 		if (!root) {
 			void vscode.window.showWarningMessage('loom: this workspace is not a quilt.');
 			return;
 		}
-		const argv = argvFor('serve', root, settings());
-		if (argv) {
-			hooks.openTerminal('loom serve', argv, root);
+		const server = await ensureServer(root);
+		if (server && !server.started) {
+			void vscode.window.showInformationMessage(`loom serve is already running at ${server.url}`);
 		}
 	});
-	register('loom.open', async () => {
-		const key = keyUnderCursor();
-		if (!key) {
+	register('loom.open', async (key?: unknown) => {
+		const target = typeof key === 'string' && key ? key : keyUnderCursor();
+		if (!target) {
 			void vscode.window.showWarningMessage('loom: no key under the cursor.');
 			return;
 		}
-		await hooks.openExternal(arrasUrl(settings(), key));
+		const root = currentQuilt();
+		if (!root) {
+			void vscode.window.showWarningMessage('loom: this workspace is not a quilt.');
+			return;
+		}
+		const server = await ensureServer(root);
+		if (server) {
+			await hooks.openExternal(nodeUrl(server.url, target));
+		}
 	});
+	register('loom.run', (argv: unknown, confirm: unknown) => runArgv(argv, confirm));
 	register('loom.restart', async () => {
 		await stopClient();
 		client = startClient(context);
@@ -266,5 +361,6 @@ async function stopClient(): Promise<void> {
 }
 
 export async function deactivate(): Promise<void> {
+	stopServers();
 	await stopClient();
 }
