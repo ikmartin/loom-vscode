@@ -1,0 +1,9 @@
+.vscode-test/**
+.vscode-test.mjs
+fixtures/**
+src/**
+out/test/**
+**/*.map
+**/tsconfig.json
+**/.eslintrc*
+node_modules/.bin/**

@@ -1,0 +1,116 @@
+{
+  "name": "loom-vscode",
+  "displayName": "loom",
+  "description": "Navigation, diagnostics and commands for loom quilts, through the loom language server.",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
+  "publisher": "ikmartin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ikmartin/loom-vscode.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/config.toml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "loom.status",
+        "title": "Status",
+        "category": "Loom"
+      },
+      {
+        "command": "loom.lint",
+        "title": "Lint",
+        "category": "Loom"
+      },
+      {
+        "command": "loom.new",
+        "title": "New node",
+        "category": "Loom"
+      },
+      {
+        "command": "loom.accept",
+        "title": "Accept the key under the cursor",
+        "category": "Loom"
+      },
+      {
+        "command": "loom.serve",
+        "title": "Serve",
+        "category": "Loom"
+      },
+      {
+        "command": "loom.open",
+        "title": "Open in arras",
+        "category": "Loom"
+      },
+      {
+        "command": "loom.bundle",
+        "title": "Bundle the key under the cursor",
+        "category": "Loom"
+      },
+      {
+        "command": "loom.restart",
+        "title": "Restart the language server",
+        "category": "Loom"
+      }
+    ],
+    "configuration": {
+      "title": "Loom",
+      "properties": {
+        "loom.loomPath": {
+          "type": "string",
+          "default": "loom",
+          "description": "The loom executable."
+        },
+        "loom.serverPath": {
+          "type": "string",
+          "default": "loom-lsp",
+          "description": "The loom-lsp executable."
+        },
+        "loom.servePort": {
+          "type": "number",
+          "default": 8000,
+          "description": "The port loom serve listens on."
+        },
+        "loom.autostart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the language server in a quilt."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src",
+    "pretest": "npm run compile",
+    "test": "vscode-test",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.7",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^3.0.0",
+    "eslint": "^9.0.0",
+    "mocha": "^10.7.0",
+    "typescript": "^5.5.0"
+  }
+}
