@@ -61,6 +61,11 @@
         "command": "loom.restart",
         "title": "Restart the language server",
         "category": "Loom"
+      },
+      {
+        "command": "loom.compileFromRoot",
+        "title": "Compile this quilt from its root (LaTeX Workshop)",
+        "category": "Loom"
       }
     ],
     "configuration": {

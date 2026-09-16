@@ -8,6 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { argvFor, confirmationFor, nodeUrl, Settings } from '../commands';
+import { atLeast, compareVersions, fromFolderValue, LatexWorkshopState, plan } from '../latexWorkshop';
 import { findQuilt, keyAt } from '../quilt';
 import { freePort, waitForManifest } from '../serve';
 
@@ -187,5 +188,64 @@ suite('the key under the cursor', () => {
 
 	test('gives nothing when there is nothing to take', () => {
 		assert.strictEqual(keyAt('plain prose with no commands', 4), undefined);
+	});
+});
+
+suite('compiling with LaTeX Workshop', () => {
+	const folder = path.resolve('/work/space');
+	const state = (over: Partial<LatexWorkshopState>): LatexWorkshopState => ({
+		version: '10.18.1',
+		workspaceFolder: folder,
+		quiltRoot: folder,
+		currentFromFolder: undefined,
+		currentFromWorkspaceFolder: undefined,
+		...over
+	});
+
+	test('names the quilt root from the workspace folder', () => {
+		assert.strictEqual(fromFolderValue(folder, folder), '.');
+		assert.strictEqual(fromFolderValue(folder, path.join(folder, 'papers', 'q')), 'papers/q');
+		const outside = path.resolve('/elsewhere/q');
+		assert.strictEqual(fromFolderValue(folder, outside), outside);
+		assert.strictEqual(fromFolderValue(folder, path.resolve('/work/spaced')), path.resolve('/work/spaced'));
+	});
+
+	test('compares versions numerically', () => {
+		assert.ok(compareVersions('10.15.0', '10.9.9') > 0);
+		assert.ok(compareVersions('10.14.2', '10.15.0') < 0);
+		assert.strictEqual(compareVersions('10.15', '10.15.0'), 0);
+		assert.ok(atLeast('10.18.1', '10.15.0'));
+		assert.ok(atLeast('10.15.0', '10.15.0'));
+		assert.ok(!atLeast('10.12.3', '10.15.0'));
+	});
+
+	test('does nothing when LaTeX Workshop is not installed', () => {
+		assert.deepStrictEqual(plan(state({ version: undefined })), { kind: 'none', reason: 'not installed' });
+	});
+
+	test('sets fromFolder on a recent version', () => {
+		assert.deepStrictEqual(plan(state({})), { kind: 'fromFolder', value: '.' });
+		assert.deepStrictEqual(plan(state({ quiltRoot: path.join(folder, 'sub', 'q') })), { kind: 'fromFolder', value: 'sub/q' });
+		assert.deepStrictEqual(plan(state({ currentFromFolder: 'drafts' })), { kind: 'fromFolder', value: '.' });
+	});
+
+	test('does nothing when fromFolder already names the root', () => {
+		for (const current of ['.', './', folder]) {
+			assert.strictEqual(plan(state({ currentFromFolder: current })).kind, 'none', current);
+		}
+		assert.strictEqual(plan(state({ quiltRoot: path.join(folder, 'sub', 'q'), currentFromFolder: 'sub/q' })).kind, 'none');
+	});
+
+	test('sets fromWorkspaceFolder on 10.12 to 10.14 when the quilt is the folder', () => {
+		assert.deepStrictEqual(plan(state({ version: '10.13.0' })), { kind: 'fromWorkspaceFolder' });
+		assert.strictEqual(plan(state({ version: '10.13.0', currentFromWorkspaceFolder: true })).kind, 'none');
+	});
+
+	test('needs 10.15.0 for a nested quilt, and 10.12.0 for any', () => {
+		for (const s of [state({ version: '10.13.0', quiltRoot: path.join(folder, 'sub', 'q') }), state({ version: '10.11.0' })]) {
+			const got = plan(s);
+			assert.strictEqual(got.kind, 'unsupported');
+			assert.match((got as { message: string }).message, /10\.15\.0 or later/);
+		}
 	});
 });

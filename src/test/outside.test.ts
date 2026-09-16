@@ -25,5 +25,7 @@ suite('outside a quilt', () => {
 	test('the commands are registered but report that there is no quilt', async () => {
 		const all = await vscode.commands.getCommands(true);
 		assert.ok(all.includes('loom.status'));
+		assert.ok(all.includes('loom.compileFromRoot'));
+		await vscode.commands.executeCommand('loom.compileFromRoot');
 	});
 });

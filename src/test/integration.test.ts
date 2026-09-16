@@ -61,7 +61,8 @@ suite('the extension in a quilt', () => {
 			'loom.open',
 			'loom.bundle',
 			'loom.restart',
-			'loom.run'
+			'loom.run',
+			'loom.compileFromRoot'
 		]) {
 			assert.ok(all.includes(name), `${name} was not registered`);
 		}
@@ -167,6 +168,60 @@ suite('the extension in a quilt', () => {
 			ext.stopServers();
 			Object.assign(ext.hooks, saved);
 		}
+	});
+
+	suite('compiling with LaTeX Workshop', () => {
+		let ext: Extension;
+		let saved: Extension['hooks'];
+		let root: string;
+		let writes: Array<{ key: string; value: unknown; folder: string }>;
+		let asked: string[][];
+		let answer: string | undefined;
+
+		setup(async () => {
+			ext = (await import('../extension.js')) as Extension;
+			saved = { ...ext.hooks };
+			root = vscode.workspace.workspaceFolders![0].uri.fsPath;
+			writes = [];
+			asked = [];
+			answer = 'Set it';
+			ext.hooks.latexWorkshopVersion = () => '10.18.1';
+			ext.hooks.writeLatexWorkshopSetting = async (key, value, folder) => {
+				writes.push({ key, value, folder: folder.toString() });
+			};
+			ext.hooks.ask = async (_message, ...items) => {
+				asked.push(items);
+				return answer;
+			};
+			await ext.resetLatexWorkshopPrompt(root);
+		});
+
+		teardown(async () => {
+			Object.assign(ext.hooks, saved);
+			await ext.resetLatexWorkshopPrompt(root);
+		});
+
+		test('the command sets fromFolder to . for the workspace folder', async () => {
+			await vscode.commands.executeCommand('loom.compileFromRoot');
+			assert.deepStrictEqual(asked, [['Set it', 'Cancel']]);
+			assert.deepStrictEqual(writes, [{ key: 'latex.build.fromFolder', value: '.', folder: vscode.workspace.workspaceFolders![0].uri.toString() }]);
+		});
+
+		test("the automatic offer stops after Don't ask again", async () => {
+			answer = "Don't ask again";
+			await ext.configureLatexWorkshop(root, false);
+			assert.deepStrictEqual(asked, [['Set it', 'Not now', "Don't ask again"]]);
+			await ext.configureLatexWorkshop(root, false);
+			assert.strictEqual(asked.length, 1, 'it asked again');
+			assert.deepStrictEqual(writes, []);
+		});
+
+		test('the command writes nothing without LaTeX Workshop', async () => {
+			ext.hooks.latexWorkshopVersion = () => undefined;
+			await vscode.commands.executeCommand('loom.compileFromRoot');
+			assert.deepStrictEqual(asked, []);
+			assert.deepStrictEqual(writes, []);
+		});
 	});
 
 	suite('navigation from the server', () => {

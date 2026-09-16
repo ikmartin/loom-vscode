@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, State, TransportKind } from 'vscode-languageclient/node';
 
 import { argvFor, confirmationFor, nodeUrl, Settings } from './commands';
+import { dismissedKey, plan } from './latexWorkshop';
 import { findQuilt, keyAt } from './quilt';
 import { freePort, waitForManifest } from './serve';
 
@@ -14,6 +15,7 @@ let client: LanguageClient | undefined;
 export let lastStartError: string | undefined;
 let status: vscode.StatusBarItem | undefined;
 let output: vscode.OutputChannel | undefined;
+let extensionContext: vscode.ExtensionContext | undefined;
 
 export function settings(): Settings {
 	const c = vscode.workspace.getConfiguration('loom');
@@ -141,12 +143,90 @@ async function showLint(json: string, root: string): Promise<void> {
 export const hooks: {
 	openExternal: (url: string) => Thenable<boolean>;
 	startServer: (argv: string[], cwd: string) => vscode.Terminal;
+	latexWorkshopVersion: () => string | undefined;
+	writeLatexWorkshopSetting: (key: string, value: unknown, folder: vscode.Uri) => Thenable<void>;
+	ask: (message: string, ...items: string[]) => Thenable<string | undefined>;
 } = {
 	openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
 	// the terminal runs loom itself rather than a shell, so it ends when loom does; it is never shown, so the editor keeps focus
 	startServer: (argv, cwd) =>
-		vscode.window.createTerminal({ name: 'loom serve', cwd, shellPath: argv[0], shellArgs: argv.slice(1) })
+		vscode.window.createTerminal({ name: 'loom serve', cwd, shellPath: argv[0], shellArgs: argv.slice(1) }),
+	latexWorkshopVersion: () => vscode.extensions.getExtension('James-Yu.latex-workshop')?.packageJSON?.version,
+	// writing a setting LaTeX Workshop has not registered throws, so tests without it replace this
+	writeLatexWorkshopSetting: (key, value, folder) =>
+		vscode.workspace.getConfiguration('latex-workshop', folder).update(key, value, vscode.ConfigurationTarget.WorkspaceFolder),
+	ask: (message, ...items) => vscode.window.showInformationMessage(message, ...items)
 };
+
+/** Quilts already warned this session that their LaTeX Workshop is too old, and quilts with an automatic prompt open or answered 'Not now'. */
+const latexWorkshopWarned = new Set<string>();
+const latexWorkshopQuiet = new Set<string>();
+
+/** Forget "Don't ask again" and this session's prompts for `root`; for tests. */
+export async function resetLatexWorkshopPrompt(root: string): Promise<void> {
+	latexWorkshopWarned.delete(root);
+	latexWorkshopQuiet.delete(root);
+	await extensionContext?.workspaceState.update(dismissedKey(root), undefined);
+}
+
+/**
+ * Offer to make LaTeX Workshop compile the quilt at `root` from its root, and write the setting to the workspace folder on 'Set it'.
+ *
+ * `interactive` is the palette command: it always asks and reports when nothing is needed. Otherwise it stays silent unless a change is needed, asks at most once a session, and never after "Don't ask again". Write errors become warnings.
+ */
+export async function configureLatexWorkshop(root: string, interactive: boolean): Promise<void> {
+	const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
+	const config = vscode.workspace.getConfiguration('latex-workshop', folder?.uri);
+	const todo = plan({
+		version: hooks.latexWorkshopVersion(),
+		workspaceFolder: folder?.uri.fsPath,
+		quiltRoot: root,
+		currentFromFolder: config.get<string>('latex.build.fromFolder'),
+		currentFromWorkspaceFolder: config.get<boolean>('latex.build.fromWorkspaceFolder')
+	});
+	if (todo.kind === 'none') {
+		if (interactive) {
+			void vscode.window.showInformationMessage(
+				todo.reason === 'not installed' ? 'LaTeX Workshop is not installed.' : 'LaTeX Workshop already compiles this quilt from its root.'
+			);
+		}
+		return;
+	}
+	if (todo.kind === 'unsupported') {
+		if (interactive || !latexWorkshopWarned.has(root)) {
+			latexWorkshopWarned.add(root);
+			void vscode.window.showWarningMessage(todo.message);
+		}
+		return;
+	}
+	if (!folder) {
+		return;
+	}
+	if (!interactive && (latexWorkshopQuiet.has(root) || extensionContext?.workspaceState.get(dismissedKey(root)))) {
+		return;
+	}
+	const message = "LaTeX Workshop compiles from the main file's folder, where loom.sty and nodes/ are not found. Compile this quilt from its root?";
+	if (!interactive) {
+		latexWorkshopQuiet.add(root);
+	}
+	const answer = interactive ? await hooks.ask(message, 'Set it', 'Cancel') : await hooks.ask(message, 'Set it', 'Not now', "Don't ask again");
+	if (answer === "Don't ask again") {
+		await extensionContext?.workspaceState.update(dismissedKey(root), true);
+		latexWorkshopQuiet.delete(root);
+		return;
+	}
+	if (answer !== 'Set it') {
+		return;
+	}
+	const [key, value] = todo.kind === 'fromFolder' ? ['latex.build.fromFolder', todo.value] : ['latex.build.fromWorkspaceFolder', true];
+	try {
+		await hooks.writeLatexWorkshopSetting(key, value, folder.uri);
+	} catch (err) {
+		void vscode.window.showWarningMessage(`loom: could not write latex-workshop.${key}: ${String(err)}`);
+		return;
+	}
+	void vscode.window.showInformationMessage(`LaTeX Workshop will compile this quilt from its root (latex-workshop.${key} = ${String(value)} in this folder's settings)`);
+}
 
 /** The `loom serve` this window owns, one per quilt root. */
 export const servers = new Map<string, { port: number; url: string; terminal: vscode.Terminal }>();
@@ -282,6 +362,7 @@ function updateStatus(): void {
 }
 
 export function activate(context: vscode.ExtensionContext): { client?: LanguageClient } {
+	extensionContext = context;
 	output = vscode.window.createOutputChannel('loom');
 	context.subscriptions.push(output, diagnostics);
 
@@ -338,9 +419,23 @@ export function activate(context: vscode.ExtensionContext): { client?: LanguageC
 		await stopClient();
 		client = startClient(context);
 	});
+	register('loom.compileFromRoot', async () => {
+		const root = currentQuilt();
+		if (!root) {
+			void vscode.window.showWarningMessage('loom: this workspace is not a quilt.');
+			return;
+		}
+		await configureLatexWorkshop(root, true);
+	});
 
 	if (vscode.workspace.getConfiguration('loom').get<boolean>('autostart', true)) {
 		client = startClient(context);
+	}
+	const root = currentQuilt();
+	if (root) {
+		void configureLatexWorkshop(root, false);
+		// LaTeX Workshop installed or enabled during the session
+		context.subscriptions.push(vscode.extensions.onDidChange(() => void configureLatexWorkshop(root, false)));
 	}
 	updateStatus();
 	return { client };
