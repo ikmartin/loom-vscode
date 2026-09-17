@@ -28,4 +28,14 @@ suite('outside a quilt', () => {
 		assert.ok(all.includes('loom.compileFromRoot'));
 		await vscode.commands.executeCommand('loom.compileFromRoot');
 	});
+
+	test('atomize and the id command are registered and report there is no quilt', async () => {
+		const all = await vscode.commands.getCommands(true);
+		assert.ok(all.includes('loom.atomize'));
+		assert.ok(all.includes('loom.nodeId'));
+		const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(`${vscode.workspace.workspaceFolders![0].uri.fsPath}/paper.tex`));
+		await vscode.window.showTextDocument(doc);
+		await vscode.commands.executeCommand('loom.atomize');
+		await vscode.commands.executeCommand('loom.nodeId');
+	});
 });

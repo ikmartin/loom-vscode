@@ -321,6 +321,43 @@ export function currentClient(): LanguageClient | undefined {
 	return client;
 }
 
+/**
+ * Apply the first `kind` code action the server offers at the cursor, as a palette command.
+ *
+ * The server plans these as workspace edits and the editor applies them, so loom never writes the author's file and one undo puts it back. `what` names the action in the message when there is none to apply, and `hint` is a further sentence for that message. Entries without an edit, and kinds the request did not ask for, are another extension's and are left alone.
+ */
+async function applyCodeActionAt(kind: vscode.CodeActionKind, what: string, hint?: string): Promise<void> {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor || editor.document.uri.scheme !== 'file' || !findQuilt(editor.document.uri.fsPath)) {
+		void vscode.window.showWarningMessage('loom: open a file of a quilt first.');
+		return;
+	}
+	if (!currentClient()) {
+		void vscode.window.showWarningMessage('loom: the language server is not running.');
+		return;
+	}
+	const offered = await vscode.commands.executeCommand<(vscode.CodeAction | vscode.Command)[]>(
+		'vscode.executeCodeActionProvider',
+		editor.document.uri,
+		editor.selection,
+		kind.value
+	);
+	const ours = (offered ?? []).filter((entry): entry is vscode.CodeAction => {
+		const action = entry as vscode.CodeAction;
+		return !!action.edit && !!action.kind && kind.contains(action.kind);
+	});
+	if (ours.length === 0) {
+		void vscode.window.showInformationMessage(`loom: there is nothing to ${what} here.${hint ? ` ${hint}` : ''}`);
+		return;
+	}
+	const action = ours[0];
+	if (!(await vscode.workspace.applyEdit(action.edit!))) {
+		void vscode.window.showWarningMessage(`loom: the editor did not apply '${action.title}'.`);
+		return;
+	}
+	void vscode.window.showInformationMessage(action.title);
+}
+
 export function startClient(context: vscode.ExtensionContext): LanguageClient | undefined {
 	const root = currentQuilt();
 	if (!root) {
@@ -415,6 +452,14 @@ export function activate(context: vscode.ExtensionContext): { client?: LanguageC
 		}
 	});
 	register('loom.run', (argv: unknown, confirm: unknown) => runArgv(argv, confirm));
+	register('loom.atomize', () =>
+		applyCodeActionAt(
+			vscode.CodeActionKind.RefactorExtract,
+			'atomize',
+			"A node with no id can be given one first with 'Loom: Give the node under the cursor an id'."
+		)
+	);
+	register('loom.nodeId', () => applyCodeActionAt(vscode.CodeActionKind.RefactorRewrite, 'give an id to'));
 	register('loom.restart', async () => {
 		await stopClient();
 		client = startClient(context);

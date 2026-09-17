@@ -60,6 +60,8 @@ suite('the extension in a quilt', () => {
 			'loom.serve',
 			'loom.open',
 			'loom.bundle',
+			'loom.atomize',
+			'loom.nodeId',
 			'loom.restart',
 			'loom.run',
 			'loom.compileFromRoot'
@@ -269,6 +271,64 @@ suite('the extension in a quilt', () => {
 				return got?.length ? got : undefined;
 			});
 			assert.ok(hints.length > 0);
+		});
+	});
+
+	suite('atomizing from the server', () => {
+		let root: string;
+
+		/** Show `name` with the cursor at the first occurrence of `needle`. */
+		async function cursorAt(name: string, needle: string): Promise<vscode.TextDocument> {
+			const document = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(root, name)));
+			const editor = await vscode.window.showTextDocument(document);
+			const at = document.positionAt(document.getText().indexOf(needle));
+			assert.ok(document.getText().includes(needle), `${name} does not contain ${needle}`);
+			editor.selection = new vscode.Selection(at, at);
+			return document;
+		}
+
+		suiteSetup(async function () {
+			this.timeout(60000);
+			if (!process.env.LOOM_LSP) {
+				this.skip();
+			}
+			root = vscode.workspace.workspaceFolders![0].uri.fsPath;
+			const { currentClient } = (await import('../extension.js')) as Extension;
+			await until('the client running', 30000, async () => currentClient()?.state === 2);
+		});
+
+		test('atomize does nothing for a node that is already its own file', async () => {
+			const nodes = vscode.Uri.file(path.join(root, 'nodes'));
+			const before = await vscode.workspace.fs.readDirectory(nodes);
+			const document = await cursorAt('nodes/sy-0003.tex', 'finite widget');
+			const text = document.getText();
+			await vscode.commands.executeCommand('loom.atomize');
+			assert.strictEqual(document.getText(), text, 'the node file was edited');
+			assert.deepStrictEqual(await vscode.workspace.fs.readDirectory(nodes), before, 'a file appeared');
+		});
+
+		test('atomize moves the definition in the draft into its own file', async function () {
+			this.timeout(60000);
+			const created = vscode.Uri.file(path.join(root, 'nodes', 'sy-0001.tex'));
+			const document = await cursorAt('drafts/main.tex', '\\begin{definition}[Widget]\\label{sy-0001}');
+			try {
+				await vscode.commands.executeCommand('loom.atomize');
+				await vscode.workspace.fs.stat(created); // throws when the edit created nothing
+				assert.ok(document.getText().includes('\\input{nodes/sy-0001}'), 'the draft does not input the new file');
+				assert.ok(!document.getText().includes('A \\emph{widget} is a pair'), 'the definition is still in the draft');
+			} finally {
+				// leave the fixture as it was: the draft back to what is on disk, and the file the edit created gone
+				for (const uri of [document.uri, created]) {
+					const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+					if (open) {
+						await vscode.window.showTextDocument(open);
+						await vscode.commands.executeCommand('workbench.action.files.revert');
+					}
+				}
+				await vscode.workspace.fs.delete(created, { useTrash: false }).then(undefined, () => undefined);
+			}
+			assert.ok(!document.isDirty, 'the draft was left unsaved');
+			assert.ok(document.getText().includes('A \\emph{widget} is a pair'), 'the draft was not put back');
 		});
 	});
 });

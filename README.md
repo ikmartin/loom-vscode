@@ -12,8 +12,10 @@ It activates only inside a quilt: a folder with a `config.toml` holding a `[quil
 - **Show Call Hierarchy** on a node shows what it uses (outgoing) and what uses it (incoming).
 - **Inlay hints** show what each `\ref`, `\uses` and `\input` points to.
 - **Code actions**: add a `\uses` entry the proof references but does not list; accept the key under the cursor, atomize the file, or insert a node skeleton, each confirming first when it writes; open the node in arras.
-- **Commands** under `Loom:` in the palette: status, lint, new node, accept, serve, open in arras, bundle, restart the server, compile this quilt from its root (LaTeX Workshop).
+- **Commands** under `Loom:` in the palette: status, lint, new node, accept, serve, open in arras, bundle, atomize the node under the cursor, give the node under the cursor an id, restart the server, compile this quilt from its root (LaTeX Workshop).
 - A **status bar item** naming the node under the cursor, which opens it in arras.
+
+**Atomize moves the node under the cursor into `nodes/<id>.tex`** and leaves an `\input{nodes/<id>}` behind, as one edit your editor applies: loom itself never writes your files, and one undo puts the draft and the new file back. A node with no id refuses, so give it one first with **Loom: Give the node under the cursor an id**, which inserts the next free `\label`. Both are offered as code actions at the node as well, and both say so when there is nothing to do where the cursor is.
 
 **Open in arras launches your browser** rather than embedding a webview. arras is a web application; a browser tab is what it wants to be, and it is the same page you would get from `loom serve`.
 
@@ -49,4 +51,4 @@ LOOM_LSP=../loom-lsp/.venv/bin/loom-lsp LOOM_BIN=../loom/.venv/bin/loom npm test
 npm run package        # a .vsix to install by hand
 ```
 
-`npm test` runs two passes in a real VS Code. Inside a copy of loom's synthetic quilt, 41 tests cover the command builders, the serve helpers and the LaTeX Workshop plan, the commands, offering and writing the LaTeX Workshop setting (with LaTeX Workshop stubbed), starting and reusing a server for Open in arras (against a stub, and against a real `loom serve` when `LOOM_BIN` is set), and, when `LOOM_LSP` is set, the client reaching *running* with workspace symbols, call hierarchy and inlay hints answering. In a plain LaTeX folder, 3 tests check that no client starts. Copy the quilt into `fixtures/synthetic` first (`cp -R ../loom/tests/quilts/synthetic fixtures/synthetic`).
+`npm test` runs two passes in a real VS Code. Inside a copy of loom's synthetic quilt, 43 tests cover the command builders, the serve helpers and the LaTeX Workshop plan, the commands, offering and writing the LaTeX Workshop setting (with LaTeX Workshop stubbed), starting and reusing a server for Open in arras (against a stub, and against a real `loom serve` when `LOOM_BIN` is set), and, when `LOOM_LSP` is set, the client reaching *running* with workspace symbols, call hierarchy and inlay hints answering and Atomize moving a node out of the draft (which the test then puts back). In a plain LaTeX folder, 4 tests check that no client starts and that the palette commands say there is no quilt. Copy the quilt into `fixtures/synthetic` first (`cp -R ../loom/tests/quilts/synthetic fixtures/synthetic`).

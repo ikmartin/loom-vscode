@@ -58,6 +58,16 @@
         "category": "Loom"
       },
       {
+        "command": "loom.atomize",
+        "title": "Atomize the node under the cursor",
+        "category": "Loom"
+      },
+      {
+        "command": "loom.nodeId",
+        "title": "Give the node under the cursor an id",
+        "category": "Loom"
+      },
+      {
         "command": "loom.restart",
         "title": "Restart the language server",
         "category": "Loom"
